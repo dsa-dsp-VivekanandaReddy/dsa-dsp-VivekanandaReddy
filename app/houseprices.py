@@ -1,13 +1,11 @@
 import pandas as pd
 import numpy as np
-import statsmodels.api as sm
-
-from sklearn.preprocessing import OneHotEncoder
-from joblib import dump, load
+from sklearn.metrics import mean_squared_log_error
 from sklearn.model_selection import train_test_split
 from sklearn.linear_model import LinearRegression
-from sklearn.metrics import mean_squared_log_error
 from pathlib import Path
+from sklearn.preprocessing import OneHotEncoder
+from joblib import dump, load
 from sklearn.preprocessing import LabelEncoder
     
 ROOT_DIR = Path('.').resolve().parents[1].absolute()
@@ -15,22 +13,20 @@ target_column = 'SalePrice'
 
 
 def fin_preprocessing(df):
+        
     df['LotFrontage'] = df['LotFrontage'].fillna(np.mean(df['LotFrontage']))
     df['LotArea'] = df['LotArea'].fillna(np.mean(df['LotArea']))
     df['Utilities'] = df['Utilities'].fillna('AllPub')
-    df['BsmtQual'] = df['BsmtQual'].fillna('Unf')
-    df['BsmtCond'] = df['BsmtCond'].fillna('Unf')
-    df['Electrical'] = df['Electrical'].fillna('Unf')
-    df['FireplaceQu'] = df['FireplaceQu'].fillna('Unf')
-    df['Fence'] = df['Fence'].fillna('Unf')
-    df['BsmtExposure'] = df['BsmtExposure'].fillna('Unf')
-    df['BsmtFinType1'] = df['BsmtFinType1'].fillna('Unf')
-    df['BsmtFinType2'] = df['BsmtFinType2'].fillna('Unf')
-    df['GarageQual'] = df['GarageQual'].fillna('Unf')
-    df['GarageCond'] = df['GarageCond'].fillna('Unf')
-    df['MasVnrType'] = df['MasVnrType'].fillna('Unf')
-    df['MasVnrArea'] = df['MasVnrArea'].fillna(0)
-    df['Alley'] = df['Alley'].fillna('Na')
+    
+    cols = df.select_dtypes(include='object').columns
+    
+    for c in cols:
+        df[c] = df[c].fillna('notavailable')
+    
+    cols = df.select_dtypes(include='number').columns
+    
+    for c in cols:
+        df[c] = df[c].fillna(0)
 
     return df
 
@@ -83,7 +79,7 @@ def predict(model, X_test):
     return y_pred
 
 def preprocess_cont(df_continuous):
-    df_continuous.select_dtypes(include='number')
+    df_continuous = df_continuous.select_dtypes(include='number')
     df_continuous = df_continuous.dropna()
     
     return df_continuous
@@ -91,26 +87,68 @@ def preprocess_cont(df_continuous):
 def final_preprocessing(df):
     
     df = fin_preprocessing(df)
-    df = df.dropna(axis=1)
+    df = df.dropna()
     cols = df.select_dtypes(include='object').columns
 
-    label_encoder = LabelEncoder()
+    #label_encoder = LabelEncoder()
 
-    for col in cols:
-        df[col] = label_encoder.fit_transform(df[col])
+    #for col in cols:
+    #    df[col] = label_encoder.fit_transform(df[col])
     
-    #one_hot = OneHotEncoder(handle_unknown='ignore')
-    #one_hot = one_hot.fit(df[cols])
+    one_hot = OneHotEncoder(handle_unknown='ignore')
+    one_hot = one_hot.fit(df[cols])
     
     
-    #df = encode(df, cols, one_hot)
+    df = encode(df, cols, one_hot)
     
 
     
     return df
+
+def first_inference(inference_df):
+    continuous_inference_df = inference_df.select_dtypes(include='number')
+    continuous_inference_df = continuous_inference_df.dropna()
     
-def inference(inference_df):
-    pass
+    return continuous_inference_df
+
+def final_inference(final_inference_df):
+    final_inference_df = fin_preprocessing(final_inference_df)
+    final_inference_df = final_inference_df.dropna()
     
-def submission(submission_df):
-    pass
+    categ_cols = final_inference_df.select_dtypes(include='object').columns
+    
+    one_hot = load(ROOT_DIR / 'models' / 'onehot.pkl')
+    
+    hp_df = one_hot.transform(final_inference_df[categ_cols]).toarray()
+    
+    categ_col_name = one_hot.get_feature_names(categ_cols)
+    hp_df = pd.DataFrame(hp_df, index=final_inference_df.index, columns=categ_col_name)
+    df_without_categ = final_inference_df.drop(columns=categ_cols)
+    final_inference_df = pd.concat([hp_df, df_without_categ], axis=1)
+    
+    return final_inference_df
+
+def submission(submit_df, inference_df, predictions):
+    submit_df[target_column] = predictions
+    submit_df = submit_df[[target_column]].reset_index()
+    inference_ids_df = inference_df.reset_index()[['Id']]
+    submission_df = inference_ids_df.merge(submit_df, on='Id', how='left')
+    submission_df[target_column].isna().sum() == len(inference_ids_df) - len(submit_df)
+    submission_df[target_column] = submission_df[target_column].fillna(0)
+
+    return submission_df
+
+
+
+def compute_rmsle(y_test: np.ndarray, y_pred: np.ndarray, precision: int = 2) -> float:
+    rmsle = np.sqrt(mean_squared_log_error(y_test, y_pred))
+    return round(rmsle, precision)
+
+def evaluation(model, X_test, y_test, y_pred):
+    y_pred = model.predict(X_test)
+    # Replace negative predictions with 0
+    y_pred = np.where(y_pred < 0, 0, y_pred)
+    print(compute_rmsle(y_test, y_pred))
+
+    return y_pred
+    
